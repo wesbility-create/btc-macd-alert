@@ -1,4 +1,4 @@
-// BTC MACD closed-candle alert with persistent cursor and delayed-run backfill.
+// MACD closed-candle alert with persistent cursor and delayed-run backfill.
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 const SYMBOL=(process.env.SYMBOL||'BTCUSDT').toUpperCase();
 const MARKET=process.env.MARKET||'spot';
@@ -10,7 +10,10 @@ const TEST_TELEGRAM=process.env.TEST_TELEGRAM==='1';
 const INTERVAL_MS=300000;
 const BASE=MARKET==='futures'?'https://fapi.binance.com/fapi/v1/klines':'https://data-api.binance.vision/api/v3/klines';
 const WINDOW=1000;
-const STATE_FILE='state/monitor-state.json';
+const ASSET=SYMBOL.endsWith('USDT')?SYMBOL.slice(0,-4):SYMBOL;
+const STATE_FILE=SYMBOL==='BTCUSDT'&&MARKET==='spot'
+  ?'state/monitor-state.json'
+  :`state/${SYMBOL}-${MARKET}.json`;
 const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:4});
 const tw=ms=>new Date(ms).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false});
 function ema(values,n){let prev=values[0],a=2/(n+1);return values.map((v,i)=>prev=i?a*v+(1-a)*prev:v);}
@@ -53,7 +56,7 @@ async function sendTelegram(message){
   const payload=await res.json();if(!res.ok||!payload.ok)throw Error('Telegram sendMessage failed: '+JSON.stringify(payload).slice(0,220));
 }
 export function formatMessage(s,now=Date.now()){return [
-  `${s.side==='LONG'?'🟢 BTC 做多訊號':'🔴 BTC 做空訊號'} | ${SYMBOL} 5m`,
+  `${s.side==='LONG'?`🟢 ${ASSET} 做多訊號`:`🔴 ${ASSET} 做空訊號`} | ${SYMBOL} 5m`,
   ...(now-(s.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號，非即時進場提示']:[]),
   `K 線收盤（台灣）：${tw(s.closeTime+1)}`,
   `參考收盤價：${fmt(s.reference)} USDT`,
@@ -72,7 +75,7 @@ export async function main(){
   if(!/^[A-Z0-9]{5,24}$/.test(SYMBOL))throw Error('Invalid SYMBOL');
   if(!(RR>0&&RR<=100))throw Error('Invalid RR');
   if(!DRY_RUN&&(!TOKEN||!CHAT_ID))throw Error('Missing Telegram credentials');
-  if(TEST_TELEGRAM){await sendTelegram('✅ BTC MACD Telegram 測試成功！\n機器人已能正常傳送通知。');console.log('Telegram test sent');return;}
+  if(TEST_TELEGRAM){await sendTelegram(`✅ ${ASSET} MACD Telegram 測試成功！\n機器人已能正常傳送通知。`);console.log('Telegram test sent');return;}
   const now=Date.now(),candles=await getCandles(now),c=enrich(candles),last=c.at(-1);
   const state=readState();
   // First deployment: check the latest 2 hours, not months of old signals.
