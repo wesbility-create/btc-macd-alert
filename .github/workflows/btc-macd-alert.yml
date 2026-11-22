@@ -5,9 +5,14 @@ on:
   schedule:
     - cron: '1-59/5 * * * *'
   workflow_dispatch:
+    inputs:
+      test_telegram:
+        description: 'Send Telegram test message'
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: btc-macd-alert
@@ -16,14 +21,31 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Run tests
+        run: npm test
       - name: Check BTC MACD
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_TELEGRAM: ${{ inputs.test_telegram && '1' || '0' }}
         run: node monitor.mjs
+      - name: Save progress
+        if: always()
+        run: |
+          if [ -f state/monitor-state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state/monitor-state.json
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: save BTC MACD monitor cursor"
+              git push
+            fi
+          fi
