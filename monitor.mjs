@@ -7,11 +7,16 @@ const TOKEN=process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID=process.env.TELEGRAM_CHAT_ID;
 const DRY_RUN=process.env.DRY_RUN==='1';
 const TEST_TELEGRAM=process.env.TEST_TELEGRAM==='1';
-const INTERVAL_MS=300000;
+const ZERO_CROSS=process.env.ALERT_MODE==='dif-zero';
+const INTERVAL=ZERO_CROSS?'3m':'5m';
+const INTERVAL_MS=ZERO_CROSS?180000:300000;
+const ZERO_TOLERANCE=0.00005;
 const BASE=MARKET==='futures'?'https://fapi.binance.com/fapi/v1/klines':'https://data-api.binance.vision/api/v3/klines';
 const WINDOW=1000;
 const ASSET=SYMBOL.endsWith('USDT')?SYMBOL.slice(0,-4):SYMBOL;
-const STATE_FILE=SYMBOL==='BTCUSDT'&&MARKET==='spot'
+const STATE_KEY=ZERO_CROSS?`${SYMBOL}:${MARKET}:3m:dif-zero`:`${SYMBOL}:${MARKET}`;
+const STATE_FILE=ZERO_CROSS?`state/${SYMBOL}-${MARKET}-3m-dif-zero.json`
+  :SYMBOL==='BTCUSDT'&&MARKET==='spot'
   ?'state/monitor-state.json'
   :`state/${SYMBOL}-${MARKET}.json`;
 const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:4});
@@ -35,12 +40,40 @@ export function detectSignalAt(c,i){
   if(!(risk>0))return null;
   return {side:long?'LONG':'SHORT',time:v.time,closeTime:v.closeTime,reference,stop,pivotTime:pivot.time,target:reference+(long?1:-1)*RR*risk,dif:v.dif,dea:v.dea,hist:v.hist,prevHist:prev.hist,rr:RR};
 }
+function zeroSide(dif) {
+  if (Math.abs(dif)<ZERO_TOLERANCE) return 0;
+  return Math.sign(dif);
+}
+
+export function detectZeroEvent(c,i) {
+  if (i<50) return null;
+  const side=zeroSide(c[i].dif);
+  const previous=zeroSide(c[i-1].dif);
+  if (side===0) return previous===0?null:'TOUCH';
+  let j=i-1;
+  while (j>=0 && zeroSide(c[j].dif)===0) j--;
+  if (j<0 || zeroSide(c[j].dif)===side) return null;
+  return side>0?'UP':'DOWN';
+}
+
+function formatZeroMessage(c,i,event,now) {
+  const labels={UP:'上穿 0 軸',DOWN:'下穿 0 軸',TOUCH:'觸碰 0 軸'};
+  const candle=c[i];
+  return [
+    `${ASSET} 3m MACD 快線 ${labels[event]} | ${SYMBOL} ${MARKET==='spot'?'現貨':'永續'}`,
+    ...(now-(candle.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號']:[]),
+    `K 線收盤（台灣）：${tw(candle.closeTime+1)}`,
+    `DIF：${fmt(c[i-1].dif)} → ${fmt(candle.dif)}`,
+    `收盤價：${fmt(candle.close)} USDT`
+  ].join('\n');
+}
+
 export function detectSignal(candles){const c=enrich(candles);return detectSignalAt(c,c.length-1);}
 export function pendingIndices(candles,lastCheckedTime){
   return candles.flatMap((c,i)=>i>=50&&c.time>lastCheckedTime?[i]:[]);
 }
 async function getCandles(now){
-  const url=new URL(BASE);url.search=new URLSearchParams({symbol:SYMBOL,interval:'5m',limit:String(WINDOW)}).toString();
+  const url=new URL(BASE);url.search=new URLSearchParams({symbol:SYMBOL,interval:INTERVAL,limit:String(WINDOW)}).toString();
   const res=await fetch(url,{signal:AbortSignal.timeout(12000)});
   if(!res.ok)throw Error(`Binance HTTP ${res.status}: ${(await res.text()).slice(0,150)}`);
   const data=await res.json();if(!Array.isArray(data))throw Error('Invalid Binance data');
@@ -68,8 +101,8 @@ export function formatMessage(s,now=Date.now()){return [
   '',
   '⚠️ 收盤確認訊號，非成交通知。回測規則是下一根 K 棒開盤進場；實際進場後須依成交價重新計算風險與止盈。'
 ].join('\n');}
-function readState(){try{const x=JSON.parse(readFileSync(STATE_FILE,'utf8'));if(x.key===`${SYMBOL}:${MARKET}`&&Number.isFinite(x.lastCheckedTime))return x;}catch(e){if(e.code!=='ENOENT')throw e;}return null;}
-function saveState(time){if(DRY_RUN)return;mkdirSync('state',{recursive:true});writeFileSync(STATE_FILE,JSON.stringify({version:1,key:`${SYMBOL}:${MARKET}`,lastCheckedTime:time,updatedAt:new Date().toISOString()},null,2)+'\n');}
+function readState(){try{const x=JSON.parse(readFileSync(STATE_FILE,'utf8'));if(x.key===STATE_KEY&&Number.isFinite(x.lastCheckedTime))return x;}catch(e){if(e.code!=='ENOENT')throw e;}return null;}
+function saveState(time){if(DRY_RUN)return;mkdirSync('state',{recursive:true});writeFileSync(STATE_FILE,JSON.stringify({version:1,key:STATE_KEY,lastCheckedTime:time,updatedAt:new Date().toISOString()},null,2)+'\n');}
 export async function main(){
   if(!['spot','futures'].includes(MARKET))throw Error('MARKET must be spot or futures');
   if(!/^[A-Z0-9]{5,24}$/.test(SYMBOL))throw Error('Invalid SYMBOL');
@@ -78,16 +111,20 @@ export async function main(){
   if(TEST_TELEGRAM){await sendTelegram(`✅ ${ASSET} MACD Telegram 測試成功！\n機器人已能正常傳送通知。`);console.log('Telegram test sent');return;}
   const now=Date.now(),candles=await getCandles(now),c=enrich(candles),last=c.at(-1);
   const state=readState();
-  // First deployment: check the latest 2 hours, not months of old signals.
-  const firstTime=state?state.lastCheckedTime:last.time-24*INTERVAL_MS;
+  // Start the new 3m alert at the latest close. Keep the 5m initial backfill.
+  const firstTime=state?state.lastCheckedTime:last.time-(ZERO_CROSS?1:24)*INTERVAL_MS;
   if(firstTime<c[50].time-INTERVAL_MS)throw Error('State cursor is older than the available candle window; manual recovery required. No cursor advanced.');
   const indices=pendingIndices(c,firstTime);
   if(!indices.length){console.log(`Up to date: ${tw(last.closeTime+1)}`);return;}
   console.log(`Checking ${indices.length} closed candles, from ${tw(c[indices[0]].closeTime+1)} to ${tw(last.closeTime+1)}`);
   let count=0;
   for(const i of indices){
-    const s=detectSignalAt(c,i);
-    if(s){await sendTelegram(formatMessage(s,now));count++;console.log(`Sent ${s.side} for ${tw(s.closeTime+1)}`);}
+    const event=ZERO_CROSS?detectZeroEvent(c,i):detectSignalAt(c,i);
+    if(event){
+      await sendTelegram(ZERO_CROSS?formatZeroMessage(c,i,event,now):formatMessage(event,now));
+      count++;
+      console.log(`Sent ${ZERO_CROSS?event:event.side} for ${tw(c[i].closeTime+1)}`);
+    }
     // Save after each successfully handled candle, including no-signal candles.
     // The workflow commits even when a later Telegram send fails.
     saveState(c[i].time);
