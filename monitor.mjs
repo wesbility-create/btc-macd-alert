@@ -74,20 +74,23 @@ function formatZeroMessage(c,i,event,now) {
   ].join('\n');
 }
 
+const SWING_NEIGHBORS=3;
+const SWING_OFFSETS=[-3,-2,-1,1,2,3];
+
 function latestSwing(candles,lastIndex,field,direction) {
-  for(let i=lastIndex;i>=2;i--){
+  for(let i=lastIndex;i>=SWING_NEIGHBORS;i--){
     const price=direction*candles[i][field];
-    if([-2,-1,1,2].every(offset=>price>direction*candles[i+offset][field]))return i;
+    if(SWING_OFFSETS.every(offset=>price>direction*candles[i+offset][field]))return i;
   }
   return -1;
 }
 
 export function detectSwingZone(candles,i) {
-  if(i<5)return [];
+  if(i<2*SWING_NEIGHBORS+1)return [];
   const events=[];
   for(const [direction,endField,startField] of [[1,'high','low'],[-1,'low','high']]){
     // Freeze the reference wave before the current candle closes.
-    const endIndex=latestSwing(candles,i-3,endField,direction);
+    const endIndex=latestSwing(candles,i-SWING_NEIGHBORS-1,endField,direction);
     if(endIndex<0)continue;
     const startIndex=latestSwing(candles,endIndex-1,startField,-direction);
     if(startIndex<0)continue;
