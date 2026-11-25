@@ -2,66 +2,55 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {detectSwingZone,confirmSwingZones} from './monitor.mjs';
 
-test('price touches the top or bottom fifth of a confirmed swing from the inside', () => {
-  const rising=[
-    [1620,1680,1650],[1620,1680,1650],[1600,1680,1640],
-    [1620,1680,1650],[1620,1680,1660],[1620,1700,1680],
-    [1620,1680,1670],[1620,1680,1680],[1620,1690,1685],[1620,1690,1686]
-  ].map(([low,high,close])=>({low,high,close}));
-  const falling=rising.map(({low,high,close})=>({low:3300-high,high:3300-low,close:3300-close}));
-  for(const [candles,side,end] of [[rising,'NEAR_HIGH',1700],[falling,'NEAR_LOW',1600]]){
-    const detect=i=>detectSwingZone(candles,i).find(event=>event.side===side);
-    assert.equal(detect(7),undefined);
-    assert.equal(detect(8).end,end);
-    assert.equal(detect(8).percent,15);
-    assert.equal(detect(9),undefined);
-    candles[8].close=end;
-    assert.equal(detect(8).percent,0);
-    candles[8].close=end+(side==='NEAR_HIGH'?1:-1);
-    assert.equal(detect(8),undefined);
-  }
-});
+const bars=[
+  [1620,1670,1650],[1620,1670,1650],[1600,1670,1640],
+  [1620,1670,1650],[1620,1670,1660],[1620,1700,1680],
+  [1620,1670,1660],[1620,1680,1660],[1620,1685,1660],
+  [1620,1670,1660],[1620,1670,1660]
+];
 
-test('waits for histogram reversal, cancels outside the zone, and sends once', () => {
-  const bars=[
-    [1620,1680,1650],[1620,1680,1650],[1600,1680,1640],
-    [1620,1680,1650],[1620,1680,1660],[1620,1700,1680],
-    [1620,1680,1670],[1620,1680,1680],[1620,1690,1685],[1620,1690,1686],
-    [1620,1690,1687]
-  ];
-  for(const direction of [1,-1]){
-    const candles=bars.map(([lo,hi,price],i)=>({
-      low:direction===1?lo:3300-hi,high:direction===1?hi:3300-lo,
-      close:direction===1?price:3300-price,hist:direction*([1,2,1,0][i-7]??1),
-      closeTime:i*180000
-    }));
-    const side=direction===1?'NEAR_HIGH':'NEAR_LOW';
-    let result=confirmSwingZones(candles,8,[]);
-    assert.equal(result.alerts.length,0);
-    assert.equal(result.waiting[0].side,side);
-    const pending=JSON.parse(JSON.stringify(result.waiting));
-    result=confirmSwingZones(candles,9,pending);
-    assert.equal(result.alerts[0].side,side);
-    assert.equal(result.alerts[0].enteredAt,candles[8].closeTime);
-    assert.equal(result.waiting.length,0);
-    assert.equal(confirmSwingZones(candles,10,result.waiting).alerts.length,0);
-    candles[9].hist=-direction;
-    assert.equal(confirmSwingZones(candles,9,pending).alerts[0].side,side);
-    candles[7].hist=-3*direction;
-    candles[8].hist=-1*direction;
-    candles[9].hist=-2*direction;
-    assert.equal(confirmSwingZones(candles,9,pending).alerts[0].side,side);
-    candles[7].hist=3*direction;
-    candles[8].hist=2*direction;
-    candles[9].hist=1*direction;
-    assert.equal(confirmSwingZones(candles,9,pending).alerts.length,0);
-    candles[7].hist=1*direction;
-    candles[6].hist=0;
-    candles[8].hist=0.5*direction;
-    assert.equal(confirmSwingZones(candles,8,[]).alerts[0].side,side);
-    candles[9].close=direction===1?1680:1620;
-    result=confirmSwingZones(candles,9,pending);
-    assert.equal(result.alerts.length,0);
-    assert.equal(result.waiting.length,0);
-  }
-});
+for(const direction of [1,-1]){
+  const side=direction===1?'NEAR_HIGH':'NEAR_LOW';
+  const field=direction===1?'high':'low';
+  const mirror=price=>direction===1?price:3300-price;
+  const makeCandles=()=>bars.map(([low,high,close],i)=>({
+    low:direction===1?low:mirror(high),
+    high:direction===1?high:mirror(low),
+    close:mirror(close),
+    hist:direction*([1,2,1,2,1][i-6]??0),
+    closeTime:(i+1)*180000-1
+  }));
+
+  test(`${side} tracks the wick in the zone and waits for a later turn outside it`,()=>{
+    const candles=makeCandles();
+    const detect=i=>detectSwingZone(candles,i).find(zone=>zone.side===side);
+    const confirm=(i,pending)=>confirmSwingZones(candles,i,pending.filter(zone=>zone.side===side));
+    assert.equal(detect(7),undefined);
+    assert.equal(detect(8).end,mirror(1700));
+    const touched=confirm(8,[]);
+    assert.equal(touched.alerts.length,0);
+    assert.equal(touched.waiting[0].side,side);
+    const waiting=confirm(9,JSON.parse(JSON.stringify(touched.waiting)));
+    assert.equal(waiting.alerts.length,0);
+    assert.equal(waiting.waiting[0].closeTime,candles[8].closeTime);
+    const confirmed=confirm(10,waiting.waiting);
+    assert.equal(confirmed.alerts[0].price,mirror(1670));
+    assert.equal(confirmed.alerts[0].percent,30);
+    assert.equal(confirmed.waiting.length,0);
+  });
+
+  test(`${side} uses a strict boundary on the next reversal`,()=>{
+    const candles=makeCandles();
+    const waiting=confirmSwingZones(candles,8,[]).waiting;
+    for(const invalidPrice of [1700,1701]){
+      candles[10][field]=mirror(invalidPrice);
+      const result=confirmSwingZones(candles,10,waiting);
+      assert.equal(result.alerts.some(zone=>zone.side===side),false);
+      assert.equal(result.waiting.some(zone=>zone.side===side),false);
+    }
+    candles[8][field]=mirror(1680);
+    assert.equal(detectSwingZone(candles,8).some(zone=>zone.side===side),false);
+    candles[8][field]=mirror(1700);
+    assert.equal(detectSwingZone(candles,8).some(zone=>zone.side===side),true);
+  });
+}

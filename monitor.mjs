@@ -84,8 +84,6 @@ function latestSwing(candles,lastIndex,field,direction) {
 
 export function detectSwingZone(candles,i) {
   if(i<5)return [];
-  const previous=candles[i-1].close;
-  const close=candles[i].close;
   const events=[];
   for(const [direction,endField,startField] of [[1,'high','low'],[-1,'low','high']]){
     // Freeze the reference wave before the current candle closes.
@@ -97,11 +95,13 @@ export function detectSwingZone(candles,i) {
     const end=candles[endIndex][endField];
     const size=direction*(end-start);
     if(size<=0)continue;
-    const distance=direction*(end-close);
+    const price=candles[i][endField];
+    const previous=candles[i-1][endField];
+    const distance=direction*(end-price);
     const threshold=Number((end-direction*0.2*size).toFixed(10));
-    if(distance<0||direction*(close-threshold)<=0||direction*(previous-threshold)>0)continue;
-    events.push({side:direction===1?'NEAR_HIGH':'NEAR_LOW',start,end,threshold,close,
-      percent:100*distance/size,closeTime:candles[i].closeTime});
+    const wasInside=direction*(end-previous)>=0 && direction*(previous-threshold)>0;
+    if(distance<0||direction*(price-threshold)<=0||wasInside)continue;
+    events.push({side:direction===1?'NEAR_HIGH':'NEAR_LOW',start,end,threshold,closeTime:candles[i].closeTime});
   }
   return events;
 }
@@ -119,18 +119,18 @@ export function confirmSwingZones(candles,i,pending) {
   const previousHist=candles[i-1].hist;
   for(const zone of candidates.values()){
     const direction=zone.side==='NEAR_HIGH'?1:-1;
-    const distance=direction*(zone.end-candle.close);
-    if(distance<0||direction*(candle.close-zone.threshold)<=0)continue;
-
     const leadingSlope=direction*(previousHist-beforeHist);
     const latestSlope=direction*(candle.hist-previousHist);
-    if(leadingSlope>0 && latestSlope<0){
-      const size=direction*(zone.end-zone.start);
-      alerts.push({...zone,enteredAt:zone.closeTime,closeTime:candle.closeTime,
-        close:candle.close,percent:100*distance/size,beforeHist,previousHist,hist:candle.hist});
-    }else{
+    if(candle.closeTime<=zone.closeTime||leadingSlope<=0||latestSlope>=0){
       waiting.push(zone);
+      continue;
     }
+    const price=direction===1?candle.high:candle.low;
+    const distance=direction*(zone.end-price);
+    if(distance<=0)continue;
+    const size=direction*(zone.end-zone.start);
+    alerts.push({...zone,enteredAt:zone.closeTime,closeTime:candle.closeTime,
+      price,percent:100*distance/size,beforeHist,previousHist,hist:candle.hist});
   }
   return {waiting,alerts};
 }
@@ -145,7 +145,7 @@ function formatSwingMessage(event,now){
     `MACD 柱體${isHigh?'由升轉降':'由降轉升'}：${fmt(event.beforeHist)} → ${fmt(event.previousHist)} → ${fmt(event.hist)}`,
     `前一波：${fmt(event.start)} → ${fmt(event.end)} USDT`,
     `20% 區間界線：${fmt(event.threshold)} USDT`,
-    `收盤價：${fmt(event.close)} USDT`,
+    `轉向 K 線${isHigh?'最高':'最低'}價：${fmt(event.price)} USDT`,
     `距前波${isHigh?'高':'低'}點：上段${isHigh?'漲':'跌'}幅的 ${fmt(event.percent)}%`
   ].join('\n');
 }
