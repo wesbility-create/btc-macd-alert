@@ -22,7 +22,7 @@ test('price touches the top or bottom fifth of a confirmed swing from the inside
   }
 });
 
-test('waits for matching histogram contraction, cancels outside the zone, and sends once', () => {
+test('waits for histogram reversal, cancels outside the zone, and sends once', () => {
   const bars=[
     [1620,1680,1650],[1620,1680,1650],[1600,1680,1640],
     [1620,1680,1650],[1620,1680,1660],[1620,1700,1680],
@@ -46,7 +46,17 @@ test('waits for matching histogram contraction, cancels outside the zone, and se
     assert.equal(result.waiting.length,0);
     assert.equal(confirmSwingZones(candles,10,result.waiting).alerts.length,0);
     candles[9].hist=-direction;
+    assert.equal(confirmSwingZones(candles,9,pending).alerts[0].side,side);
+    candles[7].hist=-3*direction;
+    candles[8].hist=-1*direction;
+    candles[9].hist=-2*direction;
+    assert.equal(confirmSwingZones(candles,9,pending).alerts[0].side,side);
+    candles[7].hist=3*direction;
+    candles[8].hist=2*direction;
+    candles[9].hist=1*direction;
     assert.equal(confirmSwingZones(candles,9,pending).alerts.length,0);
+    candles[7].hist=1*direction;
+    candles[6].hist=0;
     candles[8].hist=0.5*direction;
     assert.equal(confirmSwingZones(candles,8,[]).alerts[0].side,side);
     candles[9].close=direction===1?1680:1620;

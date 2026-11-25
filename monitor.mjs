@@ -115,17 +115,19 @@ export function confirmSwingZones(candles,i,pending) {
   const waiting=[];
   const alerts=[];
   const candle=candles[i];
+  const beforeHist=candles[i-2].hist;
   const previousHist=candles[i-1].hist;
   for(const zone of candidates.values()){
     const direction=zone.side==='NEAR_HIGH'?1:-1;
     const distance=direction*(zone.end-candle.close);
     if(distance<0||direction*(candle.close-zone.threshold)<=0)continue;
 
-    const hist=direction*candle.hist;
-    if(hist>0 && hist<direction*previousHist){
+    const leadingSlope=direction*(previousHist-beforeHist);
+    const latestSlope=direction*(candle.hist-previousHist);
+    if(leadingSlope>0 && latestSlope<0){
       const size=direction*(zone.end-zone.start);
       alerts.push({...zone,enteredAt:zone.closeTime,closeTime:candle.closeTime,
-        close:candle.close,percent:100*distance/size,previousHist,hist:candle.hist});
+        close:candle.close,percent:100*distance/size,beforeHist,previousHist,hist:candle.hist});
     }else{
       waiting.push(zone);
     }
@@ -140,7 +142,7 @@ function formatSwingMessage(event,now){
     ...(now-(event.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號']:[]),
     `K 線收盤（台灣）：${tw(event.closeTime+1)}`,
     `進入區間（台灣）：${tw(event.enteredAt+1)}`,
-    `MACD ${isHigh?'正':'負'}柱縮短：${fmt(event.previousHist)} → ${fmt(event.hist)}`,
+    `MACD 柱體${isHigh?'由升轉降':'由降轉升'}：${fmt(event.beforeHist)} → ${fmt(event.previousHist)} → ${fmt(event.hist)}`,
     `前一波：${fmt(event.start)} → ${fmt(event.end)} USDT`,
     `20% 區間界線：${fmt(event.threshold)} USDT`,
     `收盤價：${fmt(event.close)} USDT`,
