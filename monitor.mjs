@@ -34,11 +34,14 @@ export function detectSignalAt(c,i){
     if(long&&x.low<c[p-1].low&&x.low<c[p-2].low&&x.low<c[p+1].low&&x.low<c[p+2].low){pivot=x;break;}
     if(short&&x.high>c[p-1].high&&x.high>c[p-2].high&&x.high>c[p+1].high&&x.high>c[p+2].high){pivot=x;break;}
   }
-  if(!pivot)return null;
-  const reference=v.close,stop=long?pivot.low:pivot.high;
-  const risk=long?reference-stop:stop-reference;
-  if(!(risk>0))return null;
-  return {side:long?'LONG':'SHORT',time:v.time,closeTime:v.closeTime,reference,stop,pivotTime:pivot.time,target:reference+(long?1:-1)*RR*risk,dif:v.dif,dea:v.dea,hist:v.hist,prevHist:prev.hist,rr:RR};
+  const reference=v.close;
+  const signal={side:long?'LONG':'SHORT',time:v.time,closeTime:v.closeTime,reference,dif:v.dif,dea:v.dea,hist:v.hist,prevHist:prev.hist,rr:RR};
+  if(!pivot)return signal;
+  const stop=long?pivot.low:pivot.high;
+  const direction=long?1:-1;
+  const risk=direction*(reference-stop);
+  if(!(risk>0))return signal;
+  return {...signal,stop,pivotTime:pivot.time,target:reference+direction*RR*risk};
 }
 function zeroSide(dif) {
   if (Math.abs(dif)<ZERO_TOLERANCE) return 0;
@@ -93,9 +96,11 @@ export function formatMessage(s,now=Date.now()){return [
   ...(now-(s.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號，非即時進場提示']:[]),
   `K 線收盤（台灣）：${tw(s.closeTime+1)}`,
   `參考收盤價：${fmt(s.reference)} USDT`,
-  `波段止損：${fmt(s.stop)} USDT`,
-  `參考 ${s.rr}R 目標：${fmt(s.target)} USDT`,
-  `波段轉折時間：${tw(s.pivotTime)}`,
+  ...(Number.isFinite(s.stop)?[
+    `波段止損：${fmt(s.stop)} USDT`,
+    `參考 ${s.rr}R 目標：${fmt(s.target)} USDT`,
+    `波段轉折時間：${tw(s.pivotTime)}`
+  ]:['波段止損／5R 目標：無有效參考點位']),
   `DIF ${fmt(s.dif)} | DEA ${fmt(s.dea)}`,
   `MACD 柱體：${fmt(s.prevHist)} → ${fmt(s.hist)}`,
   '',

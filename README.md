@@ -15,8 +15,8 @@ This is a separate GitHub repository from the backtesting website. It does not p
 
 - Binance BTCUSDT spot 5m candles; 12/26/9 EMA MACD, histogram `2*(DIF-DEA)`.
 - LONG when DIF and DEA are both >0 and histogram slope flips from decreasing to increasing (`hist[i-1]<hist[i-2] && hist[i]>hist[i-1]`). SHORT symmetric when DIF and DEA are both <0.
-- Stop: most recent confirmed 2-left/2-right swing low (LONG) or high (SHORT). Reject missing/invalid stops.
-- Message includes signal candle close as **reference**, not a guaranteed next-bar entry, and indicative 5R target. This scanner does not track open positions.
+- The MACD conditions trigger the alert. The most recent confirmed swing low (LONG) or high (SHORT) supplies an optional stop and 5R target when it is on the correct side of the reference close.
+- Message includes signal candle close as **reference**, not a guaranteed next-bar entry, and an indicative 5R target when a valid stop exists. This scanner does not track open positions.
 
 ## Reliability limitations
 
