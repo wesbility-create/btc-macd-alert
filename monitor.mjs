@@ -8,14 +8,17 @@ const CHAT_ID=process.env.TELEGRAM_CHAT_ID;
 const DRY_RUN=process.env.DRY_RUN==='1';
 const TEST_TELEGRAM=process.env.TEST_TELEGRAM==='1';
 const ZERO_CROSS=process.env.ALERT_MODE==='dif-zero';
-const INTERVAL=ZERO_CROSS?'3m':'5m';
-const INTERVAL_MS=ZERO_CROSS?180000:300000;
+const SWING_ZONE=process.env.ALERT_MODE==='swing-zone';
+const THREE_MINUTE=ZERO_CROSS||SWING_ZONE;
+const INTERVAL=THREE_MINUTE?'3m':'5m';
+const INTERVAL_MS=THREE_MINUTE?180000:300000;
 const ZERO_TOLERANCE=0.00005;
 const BASE=MARKET==='futures'?'https://fapi.binance.com/fapi/v1/klines':'https://data-api.binance.vision/api/v3/klines';
 const WINDOW=1000;
 const ASSET=SYMBOL.endsWith('USDT')?SYMBOL.slice(0,-4):SYMBOL;
-const STATE_KEY=ZERO_CROSS?`${SYMBOL}:${MARKET}:3m:dif-zero`:`${SYMBOL}:${MARKET}`;
-const STATE_FILE=ZERO_CROSS?`state/${SYMBOL}-${MARKET}-3m-dif-zero.json`
+const STATE_KEY=SWING_ZONE?`${SYMBOL}:${MARKET}:3m:swing-zone`:ZERO_CROSS?`${SYMBOL}:${MARKET}:3m:dif-zero`:`${SYMBOL}:${MARKET}`;
+const STATE_FILE=SWING_ZONE?`state/${SYMBOL}-${MARKET}-3m-swing-zone.json`
+  :ZERO_CROSS?`state/${SYMBOL}-${MARKET}-3m-dif-zero.json`
   :SYMBOL==='BTCUSDT'&&MARKET==='spot'
   ?'state/monitor-state.json'
   :`state/${SYMBOL}-${MARKET}.json`;
@@ -71,6 +74,51 @@ function formatZeroMessage(c,i,event,now) {
   ].join('\n');
 }
 
+function latestSwing(candles,lastIndex,field,direction) {
+  for(let i=lastIndex;i>=2;i--){
+    const price=direction*candles[i][field];
+    if([-2,-1,1,2].every(offset=>price>direction*candles[i+offset][field]))return i;
+  }
+  return -1;
+}
+
+export function detectSwingZone(candles,i) {
+  if(i<5)return [];
+  const previous=candles[i-1].close;
+  const close=candles[i].close;
+  const events=[];
+  for(const [direction,endField,startField] of [[1,'high','low'],[-1,'low','high']]){
+    // Freeze the reference wave before the current candle closes.
+    const endIndex=latestSwing(candles,i-3,endField,direction);
+    if(endIndex<0)continue;
+    const startIndex=latestSwing(candles,endIndex-1,startField,-direction);
+    if(startIndex<0)continue;
+    const start=candles[startIndex][startField];
+    const end=candles[endIndex][endField];
+    const size=direction*(end-start);
+    if(size<=0)continue;
+    const distance=direction*(end-close);
+    const threshold=Number((end-direction*0.2*size).toFixed(10));
+    if(distance<0||direction*(close-threshold)<=0||direction*(previous-threshold)>0)continue;
+    events.push({side:direction===1?'NEAR_HIGH':'NEAR_LOW',start,end,threshold,close,
+      percent:100*distance/size,closeTime:candles[i].closeTime});
+  }
+  return events;
+}
+
+function formatSwingMessage(event,now){
+  const isHigh=event.side==='NEAR_HIGH';
+  return [
+    `ETH 3m ${isHigh?'接近前波高點':'接近前波低點'} | ${SYMBOL} 現貨`,
+    ...(now-(event.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號']:[]),
+    `K 線收盤（台灣）：${tw(event.closeTime+1)}`,
+    `前一波：${fmt(event.start)} → ${fmt(event.end)} USDT`,
+    `20% 區間界線：${fmt(event.threshold)} USDT`,
+    `收盤價：${fmt(event.close)} USDT`,
+    `距前波${isHigh?'高':'低'}點：上段${isHigh?'漲':'跌'}幅的 ${fmt(event.percent)}%`
+  ].join('\n');
+}
+
 export function detectSignal(candles){const c=enrich(candles);return detectSignalAt(c,c.length-1);}
 export function pendingIndices(candles,lastCheckedTime){
   return candles.flatMap((c,i)=>i>=50&&c.time>lastCheckedTime?[i]:[]);
@@ -117,15 +165,21 @@ export async function main(){
   const now=Date.now(),candles=await getCandles(now),c=enrich(candles),last=c.at(-1);
   const state=readState();
   // Start the new 3m alert at the latest close. Keep the 5m initial backfill.
-  const firstTime=state?state.lastCheckedTime:last.time-(ZERO_CROSS?1:24)*INTERVAL_MS;
+  const firstTime=state?state.lastCheckedTime:last.time-(THREE_MINUTE?1:24)*INTERVAL_MS;
   if(firstTime<c[50].time-INTERVAL_MS)throw Error('State cursor is older than the available candle window; manual recovery required. No cursor advanced.');
   const indices=pendingIndices(c,firstTime);
   if(!indices.length){console.log(`Up to date: ${tw(last.closeTime+1)}`);return;}
   console.log(`Checking ${indices.length} closed candles, from ${tw(c[indices[0]].closeTime+1)} to ${tw(last.closeTime+1)}`);
   let count=0;
   for(const i of indices){
-    const event=ZERO_CROSS?detectZeroEvent(c,i):detectSignalAt(c,i);
-    if(event){
+    const event=SWING_ZONE?null:ZERO_CROSS?detectZeroEvent(c,i):detectSignalAt(c,i);
+    if(SWING_ZONE){
+      for(const swingEvent of detectSwingZone(c,i)){
+        await sendTelegram(formatSwingMessage(swingEvent,now));
+        count++;
+        console.log(`Sent ${swingEvent.side} for ${tw(c[i].closeTime+1)}`);
+      }
+    }else if(event){
       await sendTelegram(ZERO_CROSS?formatZeroMessage(c,i,event,now):formatMessage(event,now));
       count++;
       console.log(`Sent ${ZERO_CROSS?event:event.side} for ${tw(c[i].closeTime+1)}`);

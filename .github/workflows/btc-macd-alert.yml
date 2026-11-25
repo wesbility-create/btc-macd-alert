@@ -54,6 +54,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node monitor.mjs
+      - name: Check ETH 3m swing zones
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && !inputs.test_telegram }}
+        env:
+          SYMBOL: ETHUSDT
+          MARKET: spot
+          ALERT_MODE: swing-zone
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node monitor.mjs
       - name: Save progress
         if: always()
         run: |
@@ -66,6 +75,9 @@ jobs:
             fi
             if [ -f state/ETHUSDT-spot-3m-dif-zero.json ]; then
               git add -- state/ETHUSDT-spot-3m-dif-zero.json
+            fi
+            if [ -f state/ETHUSDT-spot-3m-swing-zone.json ]; then
+              git add -- state/ETHUSDT-spot-3m-swing-zone.json
             fi
             if ! git diff --cached --quiet; then
               git commit -m "chore: save MACD monitor cursors"
