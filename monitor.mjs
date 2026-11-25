@@ -106,12 +106,41 @@ export function detectSwingZone(candles,i) {
   return events;
 }
 
+export function confirmSwingZones(candles,i,pending) {
+  const candidates=new Map(pending.map(zone=>[zone.side,zone]));
+  for(const zone of detectSwingZone(candles,i)){
+    if(!candidates.has(zone.side))candidates.set(zone.side,zone);
+  }
+
+  const waiting=[];
+  const alerts=[];
+  const candle=candles[i];
+  const previousHist=candles[i-1].hist;
+  for(const zone of candidates.values()){
+    const direction=zone.side==='NEAR_HIGH'?1:-1;
+    const distance=direction*(zone.end-candle.close);
+    if(distance<0||direction*(candle.close-zone.threshold)<=0)continue;
+
+    const hist=direction*candle.hist;
+    if(hist>0 && hist<direction*previousHist){
+      const size=direction*(zone.end-zone.start);
+      alerts.push({...zone,enteredAt:zone.closeTime,closeTime:candle.closeTime,
+        close:candle.close,percent:100*distance/size,previousHist,hist:candle.hist});
+    }else{
+      waiting.push(zone);
+    }
+  }
+  return {waiting,alerts};
+}
+
 function formatSwingMessage(event,now){
   const isHigh=event.side==='NEAR_HIGH';
   return [
     `ETH 3m ${isHigh?'接近前波高點':'接近前波低點'} | ${SYMBOL} 現貨`,
     ...(now-(event.closeTime+1)>INTERVAL_MS?['⏳ 補發歷史訊號']:[]),
     `K 線收盤（台灣）：${tw(event.closeTime+1)}`,
+    `進入區間（台灣）：${tw(event.enteredAt+1)}`,
+    `MACD ${isHigh?'正':'負'}柱縮短：${fmt(event.previousHist)} → ${fmt(event.hist)}`,
     `前一波：${fmt(event.start)} → ${fmt(event.end)} USDT`,
     `20% 區間界線：${fmt(event.threshold)} USDT`,
     `收盤價：${fmt(event.close)} USDT`,
@@ -155,7 +184,7 @@ export function formatMessage(s,now=Date.now()){return [
   '⚠️ 收盤確認訊號，非成交通知。回測規則是下一根 K 棒開盤進場；實際進場後須依成交價重新計算風險與止盈。'
 ].join('\n');}
 function readState(){try{const x=JSON.parse(readFileSync(STATE_FILE,'utf8'));if(x.key===STATE_KEY&&Number.isFinite(x.lastCheckedTime))return x;}catch(e){if(e.code!=='ENOENT')throw e;}return null;}
-function saveState(time){if(DRY_RUN)return;mkdirSync('state',{recursive:true});writeFileSync(STATE_FILE,JSON.stringify({version:1,key:STATE_KEY,lastCheckedTime:time,updatedAt:new Date().toISOString()},null,2)+'\n');}
+function saveState(time,pendingSwingZones){if(DRY_RUN)return;mkdirSync('state',{recursive:true});writeFileSync(STATE_FILE,JSON.stringify({version:1,key:STATE_KEY,lastCheckedTime:time,...(SWING_ZONE?{pendingSwingZones}:{}),updatedAt:new Date().toISOString()},null,2)+'\n');}
 export async function main(){
   if(!['spot','futures'].includes(MARKET))throw Error('MARKET must be spot or futures');
   if(!/^[A-Z0-9]{5,24}$/.test(SYMBOL))throw Error('Invalid SYMBOL');
@@ -171,14 +200,17 @@ export async function main(){
   if(!indices.length){console.log(`Up to date: ${tw(last.closeTime+1)}`);return;}
   console.log(`Checking ${indices.length} closed candles, from ${tw(c[indices[0]].closeTime+1)} to ${tw(last.closeTime+1)}`);
   let count=0;
+  let pendingSwingZones=state?.pendingSwingZones??[];
   for(const i of indices){
     const event=SWING_ZONE?null:ZERO_CROSS?detectZeroEvent(c,i):detectSignalAt(c,i);
     if(SWING_ZONE){
-      for(const swingEvent of detectSwingZone(c,i)){
+      const {waiting,alerts}=confirmSwingZones(c,i,pendingSwingZones);
+      for(const swingEvent of alerts){
         await sendTelegram(formatSwingMessage(swingEvent,now));
         count++;
         console.log(`Sent ${swingEvent.side} for ${tw(c[i].closeTime+1)}`);
       }
+      pendingSwingZones=waiting;
     }else if(event){
       await sendTelegram(ZERO_CROSS?formatZeroMessage(c,i,event,now):formatMessage(event,now));
       count++;
@@ -186,7 +218,7 @@ export async function main(){
     }
     // Save after each successfully handled candle, including no-signal candles.
     // The workflow commits even when a later Telegram send fails.
-    saveState(c[i].time);
+    saveState(c[i].time,pendingSwingZones);
   }
   console.log(`Processed ${indices.length} candles; sent ${count} signal(s); cursor=${last.time}`);
 }
