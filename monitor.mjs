@@ -74,13 +74,16 @@ function formatZeroMessage(c,i,event,now) {
   ].join('\n');
 }
 
-const SWING_NEIGHBORS=3;
-const SWING_OFFSETS=[-3,-2,-1,1,2,3];
+const SWING_NEIGHBORS=20;
 
 function latestSwing(candles,lastIndex,field,direction) {
   for(let i=lastIndex;i>=SWING_NEIGHBORS;i--){
     const price=direction*candles[i][field];
-    if(SWING_OFFSETS.every(offset=>price>direction*candles[i+offset][field]))return i;
+    let offset=1;
+    while(offset<=SWING_NEIGHBORS
+      &&price>direction*candles[i-offset][field]
+      &&price>direction*candles[i+offset][field])offset++;
+    if(offset>SWING_NEIGHBORS)return i;
   }
   return -1;
 }
