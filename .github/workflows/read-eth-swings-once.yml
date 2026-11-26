@@ -1,0 +1,53 @@
+name: Read ETH swing levels once
+on:
+  push:
+    branches: ['diagnostics/eth-swing-20261126']
+permissions:
+  contents: write
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read Binance and report the confirmed levels
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const SWING_NEIGHBORS=20;
+          
+          function latestSwing(candles,lastIndex,field,direction) {
+            for(let i=lastIndex;i>=SWING_NEIGHBORS;i--){
+              const price=direction*candles[i][field];
+              let offset=1;
+              while(offset<=SWING_NEIGHBORS
+                &&price>direction*candles[i-offset][field]
+                &&price>direction*candles[i+offset][field])offset++;
+              if(offset>SWING_NEIGHBORS)return i;
+            }
+            return -1;
+          }
+          (async () => {
+            const state = JSON.parse(fs.readFileSync('state/ETHUSDT-spot-3m-swing-zone.json'));
+            const last = state.lastCheckedTime;
+            const url = 'https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=3m&limit=1000&endTime='+(last+180000);
+            const response = await fetch(url, {signal: AbortSignal.timeout(15000)});
+            if (!response.ok) throw new Error('Binance HTTP '+response.status);
+            const candles = (await response.json()).map(x=>({time:+x[0],high:+x[2],low:+x[3],closeTime:+x[6]}));
+            const i = candles.findIndex(x=>x.time===last);
+            if (i < 50) throw new Error('Could not align the scanner cursor');
+            const info = (idx,field) => idx<0?null:{price:candles[idx][field],barOpen:candles[idx].time,barClose:candles[idx].closeTime+1,confirmedAt:candles[idx+20].closeTime+1};
+            const result = {checkedClose:candles[i].closeTime+1};
+            for (const [key,dir,endField,startField] of [['high',1,'high','low'],['low',-1,'low','high']]) {
+              const endIdx=latestSwing(candles,i-21,endField,dir);
+              const startIdx=endIdx<0?-1:latestSwing(candles,endIdx-1,startField,-dir);
+              const end=info(endIdx,endField),start=info(startIdx,startField);
+              result[key]={start,end,threshold:start&&end?Number((end.price-0.2*(end.price-start.price)).toFixed(10)):null};
+            }
+            fs.writeFileSync('swing-diagnostic-result.json',JSON.stringify(result,null,2)+'\n');
+          })().catch(e=>{console.error(e.message);process.exitCode=1;});
+          JS
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add swing-diagnostic-result.json
+          git commit -m 'Record public ETH swing levels'
+          git push
