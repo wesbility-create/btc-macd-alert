@@ -1,0 +1,33 @@
+{
+  "checkedClose": 1795671900000,
+  "high": {
+    "start": {
+      "price": 1692.95,
+      "barOpen": 1795663980000,
+      "barClose": 1795664160000,
+      "confirmedAt": 1795667760000
+    },
+    "end": {
+      "price": 1707.08,
+      "barOpen": 1795667940000,
+      "barClose": 1795668120000,
+      "confirmedAt": 1795671720000
+    },
+    "threshold": 1704.254
+  },
+  "low": {
+    "start": {
+      "price": 1709.21,
+      "barOpen": 1795659660000,
+      "barClose": 1795659840000,
+      "confirmedAt": 1795663440000
+    },
+    "end": {
+      "price": 1692.95,
+      "barOpen": 1795663980000,
+      "barClose": 1795664160000,
+      "confirmedAt": 1795667760000
+    },
+    "threshold": 1696.202
+  }
+}
