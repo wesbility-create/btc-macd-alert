@@ -25,12 +25,41 @@ const STATE_FILE=SWING_ZONE?`state/${SYMBOL}-${MARKET}-3m-swing-zone.json`
 const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:4});
 const tw=ms=>new Date(ms).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false});
 function ema(values,n){let prev=values[0],a=2/(n+1);return values.map((v,i)=>prev=i?a*v+(1-a)*prev:v);}
-export function enrich(candles){const a=ema(candles.map(x=>x.close),12),b=ema(candles.map(x=>x.close),26);const dif=a.map((x,i)=>x-b[i]),dea=ema(dif,9);return candles.map((c,i)=>({...c,dif:dif[i],dea:dea[i],hist:2*(dif[i]-dea[i])}));}
+// Wilder ATR, seeded with the mean of the first 18 true ranges.
+export function supertrendDirections(candles) {
+  const period = 18;
+  const factor = 10;
+  let sum = 0;
+  let atr;
+  let upper, lower;
+  let direction = 'DOWN';
+  return candles.map((bar, i) => {
+    const previousClose = i ? candles[i-1].close : bar.close;
+    const range = Math.max(bar.high-bar.low, Math.abs(bar.high-previousClose),
+      Math.abs(bar.low-previousClose));
+    if (i < period) sum += range;
+    if (i < period-1) return null;
+    const initial = i === period-1;
+    atr = initial ? sum/period : (atr*(period-1)+range)/period;
+    const midpoint = (bar.high+bar.low)/2;
+    const basicUpper = midpoint+factor*atr;
+    const basicLower = midpoint-factor*atr;
+    if (initial || basicUpper < upper || previousClose > upper) upper = basicUpper;
+    if (initial || basicLower > lower || previousClose < lower) lower = basicLower;
+    if (!initial) {
+      if (direction === 'DOWN' && bar.close > upper) direction = 'UP';
+      else if (direction === 'UP' && bar.close < lower) direction = 'DOWN';
+    }
+    return direction;
+  });
+}
+
+export function enrich(candles){const a=ema(candles.map(x=>x.close),12),b=ema(candles.map(x=>x.close),26);const dif=a.map((x,i)=>x-b[i]),dea=ema(dif,9);const trend=THREE_MINUTE?[]:supertrendDirections(candles);return candles.map((c,i)=>({...c,dif:dif[i],dea:dea[i],hist:2*(dif[i]-dea[i]),trend:trend[i]}));}
 export function detectSignalAt(c,i){
   if(i<50)return null;
   const v=c[i],prev=c[i-1],before=c[i-2];
-  const long=v.dif>0&&v.dea>0&&prev.hist<before.hist&&v.hist>prev.hist;
-  const short=v.dif<0&&v.dea<0&&prev.hist>before.hist&&v.hist<prev.hist;
+  const long=v.trend==='UP'&&prev.hist<before.hist&&v.hist>prev.hist;
+  const short=v.trend==='DOWN'&&prev.hist>before.hist&&v.hist<prev.hist;
   if(!long&&!short)return null;
   let pivot=null;
   for(let p=i-2;p>=2;p--){const x=c[p];
@@ -38,7 +67,7 @@ export function detectSignalAt(c,i){
     if(short&&x.high>c[p-1].high&&x.high>c[p-2].high&&x.high>c[p+1].high&&x.high>c[p+2].high){pivot=x;break;}
   }
   const reference=v.close;
-  const signal={side:long?'LONG':'SHORT',time:v.time,closeTime:v.closeTime,reference,dif:v.dif,dea:v.dea,hist:v.hist,prevHist:prev.hist,rr:RR};
+  const signal={side:long?'LONG':'SHORT',time:v.time,closeTime:v.closeTime,reference,dif:v.dif,dea:v.dea,hist:v.hist,prevHist:prev.hist,beforeHist:before.hist,rr:RR};
   if(!pivot)return signal;
   const stop=long?pivot.low:pivot.high;
   const direction=long?1:-1;
@@ -186,8 +215,8 @@ export function formatMessage(s,now=Date.now()){return [
     `參考 ${s.rr}R 目標：${fmt(s.target)} USDT`,
     `波段轉折時間：${tw(s.pivotTime)}`
   ]:['波段止損／5R 目標：無有效參考點位']),
-  `DIF ${fmt(s.dif)} | DEA ${fmt(s.dea)}`,
-  `MACD 柱體：${fmt(s.prevHist)} → ${fmt(s.hist)}`,
+  `Supertrend（ATR 18，因子 10）：${s.side==='LONG'?'上行':'下行'}`,
+  `MACD 柱體：${fmt(s.beforeHist)} → ${fmt(s.prevHist)} → ${fmt(s.hist)}`,
   '',
   '⚠️ 收盤確認訊號，非成交通知。回測規則是下一根 K 棒開盤進場；實際進場後須依成交價重新計算風險與止盈。'
 ].join('\n');}

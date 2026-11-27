@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectSignalAt,formatMessage} from './monitor.mjs';
+import {detectSignalAt,formatMessage,supertrendDirections} from './monitor.mjs';
 
 for (const [direction, side] of [[1,'LONG'],[-1,'SHORT']]) {
   test(`${side} alerts depend on MACD even without a valid swing stop`, () => {
     const candles=Array.from({length:52},(_,i)=>({
       time:i*300000,closeTime:(i+1)*300000-1,close:100,low:99,high:101,
-      dif:direction,dea:direction,hist:i===50?-direction:0
+      trend:direction===1?'UP':'DOWN',dif:-direction,dea:-direction,
+      hist:direction*(i===50?-4:-3)
     }));
     const detect=()=>detectSignalAt(candles,51);
     assert.equal(detect().side,side);
@@ -20,7 +21,22 @@ for (const [direction, side] of [[1,'LONG'],[-1,'SHORT']]) {
     candles[51].close=100-direction*3;
     assert.equal(detect().side,side);
     assert.equal(detect().stop,undefined);
-    candles[51].hist=-direction;
+    candles[49].hist=direction*2;
+    candles[50].hist=direction;
+    candles[51].hist=direction*2;
+    assert.equal(detect().side,side);
+    candles[51].trend=direction===1?'DOWN':'UP';
+    assert.equal(detect(),null);
+    candles[51].trend=candles[50].trend;
+    candles[51].hist=candles[50].hist;
     assert.equal(detect(),null);
   });
 }
+
+test('Supertrend 18/10 waits for ATR then flips at strict band breaks',()=>{
+  const bars=Array.from({length:18},()=>({low:99,high:101,close:100}));
+  for (const price of [120,121,120,70]) bars.push({low:price,high:price,close:price});
+  const directions=supertrendDirections(bars);
+  assert.equal(directions[16],null);
+  assert.deepEqual(directions.slice(17),['DOWN','DOWN','UP','UP','DOWN']);
+});

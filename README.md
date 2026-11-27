@@ -13,8 +13,8 @@ This is a separate GitHub repository from the backtesting website. It does not p
 
 ## Strategy
 
-- Binance BTCUSDT spot 5m candles; 12/26/9 EMA MACD, histogram `2*(DIF-DEA)`.
-- LONG when DIF and DEA are both >0 and histogram slope flips from decreasing to increasing (`hist[i-1]<hist[i-2] && hist[i]>hist[i-1]`). SHORT symmetric when DIF and DEA are both <0.
+- Binance BTCUSDT and ETHUSDT spot 5m candles; 12/26/9 EMA MACD, histogram `2*(DIF-DEA)`.
+- LONG on an upward Supertrend (Wilder ATR 18, multiplier 10) when three closed histogram values fall then rise. SHORT on a downward Supertrend when they rise then fall. Use strict comparisons and accept either histogram sign and either side of zero for DIF and DEA.
 - The MACD conditions trigger the alert. The most recent confirmed swing low (LONG) or high (SHORT) supplies an optional stop and 5R target when it is on the correct side of the reference close.
 - Message includes signal candle close as **reference**, not a guaranteed next-bar entry, and an indicative 5R target when a valid stop exists. This scanner does not track open positions.
 
