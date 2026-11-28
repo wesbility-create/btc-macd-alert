@@ -1,7 +1,15 @@
 {
   "version": 1,
   "key": "ETHUSDT:spot:3m:swing-zone",
-  "lastCheckedTime": 1795872780000,
-  "pendingSwingZones": [],
-  "updatedAt": "2026-11-28T13:36:26.883Z"
+  "lastCheckedTime": 1795872960000,
+  "pendingSwingZones": [
+    {
+      "side": "NEAR_LOW",
+      "start": 1654.49,
+      "end": 1640.91,
+      "threshold": 1643.626,
+      "closeTime": 1795873139999
+    }
+  ],
+  "updatedAt": "2026-11-28T13:39:21.280Z"
 }
